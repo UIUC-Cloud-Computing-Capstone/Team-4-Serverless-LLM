@@ -1,0 +1,38 @@
+# Dockerfile for Worker Node
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY config.py .
+COPY contracts.py .
+COPY model_loader.py .
+COPY worker_node.py .
+COPY entrypoint_worker.py .
+RUN chmod +x entrypoint_worker.py
+
+# Create non-root user for security
+RUN useradd -m -u 1000 worker && chown -R worker:worker /app
+USER worker
+
+# Environment variables (can be overridden)
+ENV BIND_HOST=0.0.0.0
+ENV WORKER_PORT=8000
+ENV COORDINATOR_HOST=central-coordinator
+ENV COORDINATOR_PORT=9000
+ENV DEPLOYMENT_MODE=docker
+ENV LOG_LEVEL=INFO
+
+# Expose worker port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('', 0)); s.close()" || exit 1
+
+# Run worker with container-aware entrypoint
+CMD ["python3", "-u", "entrypoint_worker.py"]

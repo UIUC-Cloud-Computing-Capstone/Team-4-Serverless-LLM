@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed in images)
+*.md
+README*
+DEPLOYMENT.md
+IMPLEMENTATION_SUMMARY.md
+
+# Simulation scripts (not needed in production images)
+main.py
+centralized_simulation.py
+
+# Kubernetes manifests (not needed in images)
+k8s/
+
+# Docker files (not needed in images)
+Dockerfile*
+docker-compose.yml
+.dockerignore
+
+# Logs and temp files
+*.log
+tmp/
+temp/
+
+# macOS
+.DS_Store

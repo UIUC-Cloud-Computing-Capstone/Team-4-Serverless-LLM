@@ -1,0 +1,37 @@
+# Dockerfile for Central Coordinator
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY config.py .
+COPY contracts.py .
+COPY central_coordinator.py .
+COPY udp_central_coordinator.py .
+COPY entrypoint_coordinator.py .
+RUN chmod +x entrypoint_coordinator.py
+
+# Create non-root user for security
+RUN useradd -m -u 1000 coordinator && chown -R coordinator:coordinator /app
+USER coordinator
+
+# Environment variables (can be overridden)
+ENV BIND_HOST=0.0.0.0
+ENV COORDINATOR_PORT=9000
+ENV DEPLOYMENT_MODE=docker
+ENV LOG_LEVEL=INFO
+ENV WORKER_TIMEOUT=10.0
+
+# Expose coordinator port
+EXPOSE 9000/udp
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+    CMD python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('', 0)); s.close()" || exit 1
+
+# Run coordinator with container-aware entrypoint
+CMD ["python3", "-u", "entrypoint_coordinator.py"]

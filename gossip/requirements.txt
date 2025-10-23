@@ -1,0 +1,12 @@
+# Core dependencies for serverless LLM gossip system
+
+# PyTorch for model loading
+torch>=2.0.0
+transformers>=4.30.0
+
+# Google Cloud Storage for remote model loading
+google-cloud-storage>=2.10.0
+
+# Development/Testing
+# pytest>=7.4.0
+# pytest-timeout>=2.1.0

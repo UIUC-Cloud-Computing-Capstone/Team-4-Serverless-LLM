@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  labels:
+    app: worker
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: UDP
+      name: worker
+  selector:
+    app: worker
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: worker
+  labels:
+    app: worker
+spec:
+  serviceName: worker
+  replicas: 3
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: sllm/worker:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              protocol: UDP
+          env:
+            - name: DEPLOYMENT_MODE
+              value: "kubernetes"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: COORDINATOR_HOST
+              value: "central-coordinator"
+            - name: COORDINATOR_PORT
+              value: "9000"
+            - name: WORKER_PORT
+              value: "8000"
+            - name: REPORT_INTERVAL
+              value: "1.0"
+            - name: BIND_HOST
+              value: "0.0.0.0"
+            # WORKER_ID is automatically set from hostname (worker-0, worker-1, etc.)
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('', 0)); s.close()"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('', 0)); s.close()"
+            initialDelaySeconds: 3
+            periodSeconds: 5

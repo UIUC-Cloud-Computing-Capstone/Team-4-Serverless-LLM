@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # Central Coordinator
+  central-coordinator:
+    build:
+      context: .
+      dockerfile: Dockerfile.coordinator
+    container_name: central-coordinator
+    hostname: central-coordinator
+    environment:
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+      - WORKER_TIMEOUT=10.0
+    ports:
+      - "9000:9000/udp"
+    networks:
+      - sllm-network
+    restart: unless-stopped
+
+  # Worker 1
+  worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: worker-1
+    hostname: worker-1
+    environment:
+      - WORKER_ID=worker-1
+      - COORDINATOR_HOST=central-coordinator
+      - COORDINATOR_PORT=9000
+      - WORKER_PORT=8000
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+      - REPORT_INTERVAL=1.0
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+    volumes:
+      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      - model-cache-1:/tmp/model_cache
+    depends_on:
+      - central-coordinator
+    networks:
+      - sllm-network
+    restart: unless-stopped
+
+  # Worker 2
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: worker-2
+    hostname: worker-2
+    environment:
+      - WORKER_ID=worker-2
+      - COORDINATOR_HOST=central-coordinator
+      - COORDINATOR_PORT=9000
+      - WORKER_PORT=8000
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+      - REPORT_INTERVAL=1.0
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+    volumes:
+      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      - model-cache-2:/tmp/model_cache
+    depends_on:
+      - central-coordinator
+    networks:
+      - sllm-network
+    restart: unless-stopped
+
+  # Worker 3
+  worker-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: worker-3
+    hostname: worker-3
+    environment:
+      - WORKER_ID=worker-3
+      - COORDINATOR_HOST=central-coordinator
+      - COORDINATOR_PORT=9000
+      - WORKER_PORT=8000
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+      - REPORT_INTERVAL=1.0
+      - USE_REAL_MODELS=true
+      - GCS_BUCKET=remote_model
+      - MODEL_CACHE_DIR=/tmp/model_cache
+      - PYTORCH_DEVICE=cpu
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+    volumes:
+      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      - model-cache-3:/tmp/model_cache
+    depends_on:
+      - central-coordinator
+    networks:
+      - sllm-network
+    restart: unless-stopped
+
+networks:
+  sllm-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  model-cache-1:
+  model-cache-2:
+  model-cache-3:
+
+# For scaling workers:
+# docker-compose up --scale worker-1=5
