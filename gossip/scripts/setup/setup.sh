@@ -32,9 +32,8 @@ if ! command -v docker-compose &> /dev/null; then
 fi
 echo "✅ Docker Compose found"
 
-# Install Python dependencies
-echo "📦 Installing Python dependencies..."
-pip install -r requirements.txt
+# Note: May need to have run virtual environment setup prior to this
+pip install -r ../../requirements.txt
 echo "✅ Python dependencies installed"
 
 # Create necessary directories
