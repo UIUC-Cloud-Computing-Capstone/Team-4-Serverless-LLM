@@ -12,6 +12,7 @@ import os
 import shutil
 import logging
 import torch
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 from google.cloud import storage
@@ -58,13 +59,78 @@ class ModelLoader:
 
         # Cache of loaded models {model_id: model_object}
         self.loaded_models: Dict[str, Any] = {}
+        
+        # Download progress tracking
+        self._download_progress_lock = threading.Lock()
+
+    def _download_with_timeout(self, blob, local_file: Path, timeout_seconds: int = 300) -> bool:
+        """
+        Download a file with timeout and progress reporting.
+        
+        Args:
+            blob: GCS blob object
+            local_file: Local file path
+            timeout_seconds: Timeout in seconds (default: 5 minutes)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            file_size = blob.size
+            file_size_mb = file_size / (1024 ** 2)
+            
+            logger.info(f"Downloading {blob.name} ({file_size_mb:.1f} MB) with {timeout_seconds}s timeout")
+            
+            # Use a simple timeout approach
+            import signal
+            import threading
+            
+            download_success = [False]
+            download_error = [None]
+            
+            def download_worker():
+                try:
+                    blob.download_to_filename(str(local_file))
+                    download_success[0] = True
+                except Exception as e:
+                    download_error[0] = e
+            
+            # Start download in a separate thread
+            download_thread = threading.Thread(target=download_worker)
+            download_thread.daemon = True
+            download_thread.start()
+            
+            # Wait for completion or timeout
+            download_thread.join(timeout=timeout_seconds)
+            
+            if download_thread.is_alive():
+                logger.error(f"Download timeout after {timeout_seconds}s for {blob.name}")
+                return False
+            
+            if not download_success[0]:
+                logger.error(f"Download failed for {blob.name}: {download_error[0]}")
+                return False
+            
+            # Verify file size
+            if local_file.stat().st_size != file_size:
+                logger.error(f"File size mismatch: expected {file_size}, got {local_file.stat().st_size}")
+                local_file.unlink()
+                return False
+            
+            logger.info(f"Successfully downloaded {blob.name} ({file_size_mb:.1f} MB)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Download with timeout failed for {blob.name}: {e}")
+            return False
+
 
     def _download_from_gcs(self, model_id: str) -> Path:
         """
         Download a model from GCS to local cache.
 
         Args:
-            model_id: Model identifier (e.g., 'opt-1.3b')
+            model_id: Model identifier (e.g., 'opt-1.3b', 'opt-2.7b')
 
         Returns:
             Path to local model directory
@@ -79,7 +145,9 @@ class ModelLoader:
         if not self.bucket:
             raise RuntimeError(f"Cannot download {model_id}: GCS client not initialized")
 
-        logger.info(f"Downloading model {model_id} from gs://{self.gcs_bucket}/{model_id}")
+        # GCS path format: models/facebook/opt-1.3b/
+        gcs_prefix = f"models/facebook/{model_id}/"
+        logger.info(f"Downloading model from gs://{self.gcs_bucket}/{gcs_prefix}")
 
         # Create temporary directory for download
         temp_dir = local_model_path.with_suffix('.tmp')
@@ -87,17 +155,27 @@ class ModelLoader:
 
         try:
             # List all blobs with the model prefix
-            blobs = list(self.bucket.list_blobs(prefix=f"{model_id}/"))
+            blobs = list(self.bucket.list_blobs(prefix=gcs_prefix))
 
             if not blobs:
                 raise FileNotFoundError(f"No files found for model {model_id} in GCS bucket")
 
             logger.info(f"Downloading {len(blobs)} files for {model_id}")
 
-            # Download all files
+            # Calculate total download size
+            total_bytes = 0
             for blob in blobs:
+                if blob.name != gcs_prefix:  # Skip directory entries
+                    total_bytes += blob.size
+
+            total_mb = total_bytes / (1024 ** 2)
+            logger.info(f"Total download size: {total_mb:.2f} MB")
+
+            # Download all files with progress tracking
+            downloaded_bytes = 0
+            for i, blob in enumerate(blobs):
                 # Get relative path within model directory
-                relative_path = blob.name[len(f"{model_id}/"):]
+                relative_path = blob.name[len(gcs_prefix):]
                 if not relative_path:  # Skip if it's just the directory
                     continue
 
@@ -105,7 +183,28 @@ class ModelLoader:
                 local_file.parent.mkdir(parents=True, exist_ok=True)
 
                 logger.debug(f"Downloading {blob.name} -> {local_file}")
-                blob.download_to_filename(str(local_file))
+                
+                # Use timeout-based download for all files
+                if blob.size > 100 * 1024 * 1024:  # Large file > 100MB
+                    # Use timeout for large files (5 minutes)
+                    success = self._download_with_timeout(blob, local_file, timeout_seconds=300)
+                    if not success:
+                        raise RuntimeError(f"Download with timeout failed for {blob.name}")
+                else:
+                    # Use shorter timeout for small files (30 seconds)
+                    success = self._download_with_timeout(blob, local_file, timeout_seconds=30)
+                    if not success:
+                        raise RuntimeError(f"Download with timeout failed for {blob.name}")
+                
+                # Update progress tracking
+                downloaded_bytes += blob.size
+                downloaded_mb = downloaded_bytes / (1024 ** 2)
+                progress_pct = (downloaded_bytes / total_bytes * 100) if total_bytes > 0 else 0
+                
+                # Log progress every 10 files or for large files (>100MB)
+                if (i + 1) % 10 == 0 or blob.size > 100 * 1024 * 1024:
+                    logger.info(f"Download progress: {downloaded_mb:.1f}/{total_mb:.1f} MB "
+                               f"({progress_pct:.1f}%) - File {i+1}/{len(blobs)}")
 
             # Move from temp to final location atomically
             temp_dir.rename(local_model_path)

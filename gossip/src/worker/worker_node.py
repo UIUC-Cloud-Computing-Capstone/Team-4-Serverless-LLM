@@ -67,7 +67,9 @@ class WorkerNode:
 
         # Worker state
         self.queue_depth: int = 0
-        self.gpu_utilization: float = 0.0
+        self.memory_utilization: float = 0.0
+        self.is_ready: bool = False  # Ready to accept inference requests
+        self.initialization_time: float = 0.0  # Time taken to initialize
         self.state_lock = threading.RLock()
 
         # Model loader
@@ -109,11 +111,16 @@ class WorkerNode:
 
             try:
                 with self.state_lock:
+                    # Get actual memory utilization if not in simulation mode
+                    if self.use_real_models:
+                        self.memory_utilization = self._get_memory_utilization()
+
                     report = WorkerLoadReport(
                         node_id=self.node_id,
                         loaded_models=self.get_loaded_models(),
                         queue_depth=self.queue_depth,
-                        gpu_utilization=self.gpu_utilization,
+                        memory_utilization=self.memory_utilization,
+                        is_ready=self.is_ready,
                         timestamp=time.time()
                     )
 
@@ -130,8 +137,8 @@ class WorkerNode:
 
                 if self.verbose:
                     self.logger.debug(
-                        f"Sent report: models={len(self.loaded_models)}, "
-                        f"queue={self.queue_depth}, gpu={self.gpu_utilization:.2f}"
+                        f"Sent report: models={len(self.get_loaded_models())}, "
+                        f"queue={self.queue_depth}, memory={self.memory_utilization:.2f}"
                     )
 
             except Exception as e:
@@ -284,26 +291,167 @@ class WorkerNode:
                     self.logger.info(f"Unloaded simulated model: {model_id}")
                 return True
 
+    def _get_memory_utilization(self) -> float:
+        """
+        Get actual memory utilization of current process using top command.
+
+        Returns:
+            Memory utilization as fraction (0.0 to 1.0)
+        """
+        try:
+            import subprocess
+            import os
+
+            pid = os.getpid()
+            # Use top command to get memory utilization for this process
+            # On macOS: top -pid <pid> -l 1 -stats mem
+            # On Linux: top -b -n 1 -p <pid>
+
+            # Try macOS format first
+            try:
+                result = subprocess.run(
+                    ['top', '-pid', str(pid), '-l', '1', '-stats', 'mem'],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                # Parse memory from output (format: "123M")
+                lines = result.stdout.strip().split('\n')
+                if len(lines) >= 2:
+                    mem_str = lines[-1].strip()
+                    # Extract number and unit (e.g., "123M" or "1.5G")
+                    import re
+                    match = re.search(r'([\d.]+)([MG])', mem_str)
+                    if match:
+                        value = float(match.group(1))
+                        unit = match.group(2)
+                        # Convert to GB
+                        mem_gb = value / 1024 if unit == 'M' else value
+                        # Assume total memory is available (rough estimate)
+                        # Get total system memory
+                        total_mem = self._get_total_memory()
+                        return min(1.0, mem_gb / total_mem) if total_mem > 0 else 0.0
+            except (subprocess.SubprocessError, FileNotFoundError):
+                # Try Linux format
+                result = subprocess.run(
+                    ['ps', '-p', str(pid), '-o', '%mem'],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                lines = result.stdout.strip().split('\n')
+                if len(lines) >= 2:
+                    mem_percent = float(lines[1].strip())
+                    return mem_percent / 100.0
+        except Exception as e:
+            self.logger.warning(f"Failed to get memory utilization: {e}")
+
+        # Fallback to current value if command fails
+        return self.memory_utilization
+
+    def _get_total_memory(self) -> float:
+        """
+        Get total system memory in GB.
+
+        Returns:
+            Total memory in GB
+        """
+        try:
+            import subprocess
+            # Try macOS
+            try:
+                result = subprocess.run(
+                    ['sysctl', '-n', 'hw.memsize'],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                bytes_mem = int(result.stdout.strip())
+                return bytes_mem / (1024**3)  # Convert to GB
+            except (subprocess.SubprocessError, FileNotFoundError):
+                # Try Linux
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            kb = int(line.split()[1])
+                            return kb / (1024**2)  # Convert to GB
+        except Exception:
+            pass
+        return 16.0  # Default fallback to 16GB
+
     def set_queue_depth(self, depth: int):
         """Set the current queue depth."""
         with self.state_lock:
             self.queue_depth = depth
 
-    def set_gpu_utilization(self, utilization: float):
-        """Set the current GPU utilization (0.0 to 1.0)."""
+    def set_memory_utilization(self, utilization: float):
+        """Set the current memory utilization (0.0 to 1.0)."""
         with self.state_lock:
-            self.gpu_utilization = max(0.0, min(1.0, utilization))
+            self.memory_utilization = max(0.0, min(1.0, utilization))
 
     def simulate_workload_change(self):
         """Simulate random workload changes for testing."""
         with self.state_lock:
             # Randomly adjust queue depth
             self.queue_depth = max(0, self.queue_depth + random.randint(-2, 3))
-            # Randomly adjust GPU utilization
-            self.gpu_utilization = max(0.0, min(1.0, self.gpu_utilization + random.uniform(-0.1, 0.1)))
+            # Randomly adjust memory utilization
+            self.memory_utilization = max(0.0, min(1.0, self.memory_utilization + random.uniform(-0.1, 0.1)))
+
+    def initialize(self, models_to_load: List[str]) -> float:
+        """
+        Initialize worker by loading required models.
+
+        This should be called before start() to ensure the worker is ready
+        for inference before it begins reporting to the coordinator.
+
+        Args:
+            models_to_load: List of model IDs to load during initialization
+
+        Returns:
+            Time taken to initialize (in seconds)
+        """
+        start_time = time.time()
+
+        self.logger.info(f"{self.node_id} initializing with models: {models_to_load}")
+
+        for model_id in models_to_load:
+            self.logger.info(f"{self.node_id} loading model {model_id}...")
+            model_load_start = time.time()
+
+            success = self.load_model(model_id)
+
+            model_load_time = time.time() - model_load_start
+
+            if success:
+                self.logger.info(
+                    f"{self.node_id} successfully loaded {model_id} "
+                    f"in {model_load_time:.2f}s"
+                )
+            else:
+                self.logger.error(f"{self.node_id} failed to load {model_id}")
+
+        self.initialization_time = time.time() - start_time
+        self.is_ready = True
+
+        self.logger.info(
+            f"{self.node_id} initialization complete in {self.initialization_time:.2f}s. "
+            f"Loaded models: {self.get_loaded_models()}"
+        )
+
+        return self.initialization_time
 
     def start(self):
-        """Start the worker threads."""
+        """
+        Start the worker threads.
+
+        Note: Call initialize() first to load models before starting.
+        """
+        if not self.is_ready and self.use_real_models:
+            self.logger.warning(
+                f"{self.node_id} starting without initialization. "
+                "Call initialize() first to load models."
+            )
+
         self._reporter_thread = threading.Thread(
             target=self._reporter,
             name=f"{self.node_id}-Reporter"
@@ -315,7 +463,7 @@ class WorkerNode:
 
         self._reporter_thread.start()
         self._listener_thread.start()
-        self.logger.info(f"{self.node_id} started")
+        self.logger.info(f"{self.node_id} started (ready: {self.is_ready})")
 
     def stop(self):
         """Stop the worker gracefully."""

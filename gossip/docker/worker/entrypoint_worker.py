@@ -60,36 +60,50 @@ def main():
     signal.signal(signal.SIGTERM, shutdown_handler)
     signal.signal(signal.SIGINT, shutdown_handler)
 
-    # Start worker
-    worker.start()
-    logger.info(f"Worker {worker_id} running on {config.BIND_HOST}:{config.WORKER_PORT}")
-
-    # For demo purposes, load some models
+    # Initialize worker with models BEFORE starting
+    # This ensures the worker is ready for inference before reporting to coordinator
     if config.DEPLOYMENT_MODE == "docker" or config.DEPLOYMENT_MODE == "kubernetes":
         import random
 
+        models_to_load = []
+
+        # IMPORTANT: Only opt-1.3b and opt-2.7b are supported
+        available_models = ["opt-1.3b", "opt-2.7b"]
+
+        # Assign model based on worker ID for deterministic distribution
+        # worker-0, worker-2, worker-4, ... -> opt-1.3b
+        # worker-1, worker-3, worker-5, ... -> opt-2.7b
+        worker_index = int(worker_id.split('-')[-1]) if '-' in worker_id else 0
+        model_to_load = available_models[worker_index % len(available_models)]
+        models_to_load = [model_to_load]
+
         if config.USE_REAL_MODELS:
-            # Load actual PyTorch models from GCS
-            available_models = ["opt-1.3b", "opt-2.7b"]
-            # Each worker loads one random model
-            model_to_load = random.choice(available_models)
-            logger.info(f"Loading real model: {model_to_load}")
-            success = worker.load_model(model_to_load)
-            if success:
-                logger.info(f"Successfully loaded real model: {model_to_load}")
-            else:
-                logger.error(f"Failed to load real model: {model_to_load}")
+            logger.info(f"Worker will initialize with REAL model: {model_to_load}")
         else:
-            # Simulated mode
-            models = ["llama-7b", "llama-13b", "gpt-neo", "falcon-7b", "mistral-7b"]
-            num_models = random.randint(1, 3)
-            for model in random.sample(models, num_models):
-                worker.load_model(model)
-                logger.info(f"Loaded model: {model}")
+            logger.info(f"Worker will initialize with SIMULATED model: {model_to_load} (for demo purposes)")
+
+        # Initialize worker (loads models and marks ready)
+        logger.info("Initializing worker...")
+        init_time = worker.initialize(models_to_load=models_to_load)
+        logger.info(f"Worker initialized in {init_time:.2f}s with models: {worker.get_loaded_models()}")
 
         # Set initial state
-        worker.set_queue_depth(random.randint(0, 5))
-        worker.set_gpu_utilization(random.uniform(0.2, 0.7))
+        worker.set_queue_depth(0)  # Start with empty queue
+
+        # Get actual memory utilization from system
+        if config.USE_REAL_MODELS:
+            actual_memory = worker._get_memory_utilization()
+            logger.info(f"Actual memory utilization after model loading: {actual_memory:.2%}")
+        else:
+            # Only use random values in simulation mode
+            worker.set_memory_utilization(random.uniform(0.1, 0.3))
+    else:
+        logger.warning("Not in docker/kubernetes mode, skipping model initialization")
+
+    # Start worker (now that it's initialized)
+    worker.start()
+    logger.info(f"Worker {worker_id} running on {config.BIND_HOST}:{config.WORKER_PORT}")
+    logger.info(f"Worker ready: {worker.is_ready}, models loaded: {worker.get_loaded_models()}")
 
     # Keep running
     logger.info("Worker ready and reporting to coordinator")

@@ -69,18 +69,21 @@ def run_simulation(
             verbose=False  # Set to True for detailed logs
         )
 
-        # Load some initial models randomly
+        # Initialize with some random models
         num_models = random.randint(1, 3)
-        for model in random.sample(available_models, num_models):
-            worker.load_model(model)
+        models_to_load = random.sample(available_models, num_models)
+
+        print(f"Worker {worker.node_id}: Initializing with {models_to_load}...")
+        init_time = worker.initialize(models_to_load=models_to_load)
+        print(f"Worker {worker.node_id}: Initialized in {init_time:.2f}s")
 
         # Set initial workload
         worker.set_queue_depth(random.randint(0, 5))
-        worker.set_gpu_utilization(random.uniform(0.2, 0.7))
+        worker.set_memory_utilization(random.uniform(0.2, 0.7))
 
         workers.append(worker)
         worker.start()
-        print(f"Worker {worker.node_id} started with models: {worker.loaded_models}")
+        print(f"Worker {worker.node_id} started with models: {worker.get_loaded_models()}")
 
     # Give workers time to send initial reports
     time.sleep(2)

@@ -60,13 +60,25 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            # Model configuration - only opt-1.3b and opt-2.7b supported
+            - name: USE_REAL_MODELS
+              value: "false"  # Set to "true" to load real PyTorch models
+            - name: GCS_BUCKET
+              value: "remote_model"
+            - name: MODEL_CACHE_DIR
+              value: "/tmp/model_cache"
+            - name: PYTORCH_DEVICE
+              value: "cpu"
+            # Memory monitoring configuration
+            - name: MEMORY_THRESHOLD
+              value: "0.9"
           resources:
             requests:
-              memory: "256Mi"
-              cpu: "200m"
+              memory: "2Gi"  # opt-1.3b needs ~2.6GB
+              cpu: "500m"
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: "6Gi"  # opt-2.7b needs ~5.4GB, with some headroom
+              cpu: "2000m"
           livenessProbe:
             exec:
               command:

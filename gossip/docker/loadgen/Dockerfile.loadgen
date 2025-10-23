@@ -1,0 +1,28 @@
+# Dockerfile for Load Generator
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY config.py .
+COPY contracts.py .
+COPY worker_node.py .
+COPY model_loader.py .
+COPY dataset_loader.py .
+COPY workload_generator.py .
+COPY load_generator.py .
+
+# Create non-root user for security
+RUN useradd -m -u 1000 loadgen && chown -R loadgen:loadgen /app
+USER loadgen
+
+# Environment variables
+ENV COORDINATOR_HOST=central-coordinator
+ENV COORDINATOR_PORT=9000
+
+# Run load generator
+CMD ["python3", "-u", "load_generator.py", "--coordinator-host", "${COORDINATOR_HOST}", "--coordinator-port", "${COORDINATOR_PORT}"]

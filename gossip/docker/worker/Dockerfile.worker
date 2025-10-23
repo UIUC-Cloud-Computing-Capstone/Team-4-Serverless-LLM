@@ -12,6 +12,8 @@ COPY config.py .
 COPY contracts.py .
 COPY model_loader.py .
 COPY worker_node.py .
+COPY dataset_loader.py .
+COPY workload_generator.py .
 COPY entrypoint_worker.py .
 RUN chmod +x entrypoint_worker.py
 

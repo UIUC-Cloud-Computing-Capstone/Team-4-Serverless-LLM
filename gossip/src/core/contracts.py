@@ -30,13 +30,15 @@ class WorkerLoadReport:
         node_id: Unique identifier for the worker node
         loaded_models: List of model identifiers currently loaded in memory
         queue_depth: Number of pending requests in the worker's queue
-        gpu_utilization: GPU utilization as a fraction (0.0 to 1.0)
+        memory_utilization: Memory utilization as a fraction (0.0 to 1.0)
+        is_ready: Whether worker has finished initialization and is ready for inference
         timestamp: Unix timestamp when this report was generated (optional)
     """
     node_id: str
     loaded_models: List[str]
     queue_depth: int
-    gpu_utilization: float
+    memory_utilization: float
+    is_ready: bool = False
     timestamp: Optional[float] = None
 
     def to_dict(self) -> Dict:
@@ -57,9 +59,9 @@ class WorkerLoadReport:
         """Create from JSON string."""
         return cls.from_dict(json.loads(json_str))
 
-    def is_overloaded(self, queue_threshold: int = 10, gpu_threshold: float = 0.9) -> bool:
+    def is_overloaded(self, queue_threshold: int = 10, memory_threshold: float = 0.9) -> bool:
         """Check if worker is overloaded based on thresholds."""
-        return self.queue_depth > queue_threshold or self.gpu_utilization > gpu_threshold
+        return self.queue_depth > queue_threshold or self.memory_utilization > memory_threshold
 
 
 @dataclass
@@ -146,7 +148,8 @@ EXAMPLE_WORKER_LOAD_REPORT = {
     "node_id": "w1",
     "loaded_models": ["m1", "m2"],
     "queue_depth": 3,
-    "gpu_utilization": 0.65,
+    "memory_utilization": 0.65,
+    "is_ready": True,
     "timestamp": 1234567890.123
 }
 

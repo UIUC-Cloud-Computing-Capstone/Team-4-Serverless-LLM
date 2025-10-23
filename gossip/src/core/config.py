@@ -27,7 +27,8 @@ class Config:
 
     # Resource Thresholds
     QUEUE_THRESHOLD: int = int(os.getenv("QUEUE_THRESHOLD", "10"))
-    GPU_THRESHOLD: float = float(os.getenv("GPU_THRESHOLD", "0.9"))
+    MEMORY_THRESHOLD: float = float(os.getenv("MEMORY_THRESHOLD", "0.9"))
+    GPU_THRESHOLD: float = float(os.getenv("GPU_THRESHOLD", "0.9"))  # Legacy, kept for backward compatibility
 
     # Logging Configuration
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

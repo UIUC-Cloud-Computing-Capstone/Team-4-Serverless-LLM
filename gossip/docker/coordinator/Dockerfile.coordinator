@@ -12,6 +12,8 @@ COPY config.py .
 COPY contracts.py .
 COPY central_coordinator.py .
 COPY udp_central_coordinator.py .
+COPY dataset_loader.py .
+COPY workload_generator.py .
 COPY entrypoint_coordinator.py .
 RUN chmod +x entrypoint_coordinator.py
 
