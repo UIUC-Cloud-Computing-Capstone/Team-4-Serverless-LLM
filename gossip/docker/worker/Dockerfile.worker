@@ -8,13 +8,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY config.py .
-COPY contracts.py .
-COPY model_loader.py .
-COPY worker_node.py .
-COPY dataset_loader.py .
-COPY workload_generator.py .
-COPY entrypoint_worker.py .
+COPY src/core/config.py .
+COPY src/core/contracts.py .
+COPY src/utils/model_loader.py .
+COPY src/worker/worker_node.py .
+COPY src/loadgen/dataset_loader.py .
+COPY src/loadgen/workload_generator.py .
+COPY docker/worker/entrypoint_worker.py .
 RUN chmod +x entrypoint_worker.py
 
 # Create non-root user for security

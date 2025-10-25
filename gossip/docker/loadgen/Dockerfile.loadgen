@@ -8,21 +8,28 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY config.py .
-COPY contracts.py .
-COPY worker_node.py .
-COPY model_loader.py .
-COPY dataset_loader.py .
-COPY workload_generator.py .
-COPY load_generator.py .
+COPY src/core/config.py .
+COPY src/core/contracts.py .
+COPY src/worker/worker_node.py .
+COPY src/utils/model_loader.py .
+COPY src/loadgen/dataset_loader.py .
+COPY src/loadgen/workload_generator.py .
+COPY src/loadgen/load_generator.py .
+COPY docker/loadgen/entrypoint_loadgen.py .
+RUN chmod +x entrypoint_loadgen.py
 
 # Create non-root user for security
 RUN useradd -m -u 1000 loadgen && chown -R loadgen:loadgen /app
 USER loadgen
 
-# Environment variables
+# Environment variables (can be overridden)
 ENV COORDINATOR_HOST=central-coordinator
 ENV COORDINATOR_PORT=9000
+ENV TARGET_RPS=10.0
+ENV CV=8.0
+ENV DURATION=60.0
+ENV DEPLOYMENT_MODE=docker
+ENV LOG_LEVEL=INFO
 
 # Run load generator
-CMD ["python3", "-u", "load_generator.py", "--coordinator-host", "${COORDINATOR_HOST}", "--coordinator-port", "${COORDINATOR_PORT}"]
+CMD ["python3", "-u", "entrypoint_loadgen.py"]

@@ -233,8 +233,23 @@ class ModelLoader:
             return True
 
         try:
-            # Download from GCS if needed
-            local_model_path = self._download_from_gcs(model_id)
+            # Try to download from GCS first
+            local_model_path = None
+            try:
+                local_model_path = self._download_from_gcs(model_id)
+            except Exception as gcs_error:
+                logger.warning(f"GCS download failed for {model_id}: {gcs_error}")
+                logger.info(f"Falling back to HuggingFace for {model_id}")
+
+                # Fallback: Download directly from HuggingFace
+                local_model_path = self.cache_dir / model_id
+                if not local_model_path.exists():
+                    logger.info(f"Downloading {model_id} from HuggingFace...")
+                    # HuggingFace will download and cache automatically
+                    hf_model_name = f"facebook/{model_id}"
+                    local_model_path = hf_model_name
+                else:
+                    logger.info(f"Using cached model at {local_model_path}")
 
             logger.info(f"Loading model {model_id} from {local_model_path}")
 

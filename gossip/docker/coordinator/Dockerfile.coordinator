@@ -8,13 +8,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY config.py .
-COPY contracts.py .
-COPY central_coordinator.py .
-COPY udp_central_coordinator.py .
-COPY dataset_loader.py .
-COPY workload_generator.py .
-COPY entrypoint_coordinator.py .
+COPY src/core/config.py .
+COPY src/core/contracts.py .
+COPY src/coordinator/central_coordinator.py .
+COPY src/coordinator/udp_central_coordinator.py .
+COPY src/loadgen/dataset_loader.py .
+COPY src/loadgen/workload_generator.py .
+COPY docker/coordinator/entrypoint_coordinator.py .
 RUN chmod +x entrypoint_coordinator.py
 
 # Create non-root user for security
