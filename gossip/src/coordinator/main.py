@@ -1,9 +1,9 @@
 """
-Runner to start the UDP Central Coordinator and measure scheduling latencies.
+Runner to start the UDP Central Coordinator and measure scheduling latencies using Docker Swarm.
 
 This script:
 - Starts an in-process `UDPCentralCoordinator` (UDP listener)
-- Spawns a small set of simulated workers that periodically send `worker_report` messages
+- Spawns a Docker Swarm with a specified number of worker nodes
 - Sends schedule requests and measures round-trip time (RTT) for placement responses
 - Prints basic latency statistics (min/avg/p50/p95/p99/max)
 
@@ -19,16 +19,18 @@ import logging
 import pickle
 import socket
 import statistics
+import subprocess
 import threading
 import time
 import uuid
 from typing import List, Tuple
 
+from docker import from_env as client
+from docker.models.containers import Container
+from docker.types import Mount
+
 from udp_central_coordinator import UDPCentralCoordinator
 from contracts import WorkerLoadReport, ScheduleRequest, ScheduleResponse
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(message)s')
-logger = logging.getLogger("central-coord-runner")
 
 
 def start_coordinator(host: str, port: int, worker_timeout: float, verbose: bool) -> UDPCentralCoordinator:
@@ -56,57 +58,25 @@ def _send_udp_message(dest: Tuple[str, int], payload: dict, bind_addr: Tuple[str
         sock.close()
 
 
-class WorkerSimulator(threading.Thread):
-    """Simulates a worker by periodically sending `worker_report` messages to the coordinator."""
-
-    def __init__(self, worker_id: str, host: str, port: int, coordinator_addr: Tuple[str, int], interval: float = 1.0, models: List[str] = None, verbose: bool = False):
-        super().__init__(daemon=True)
-        self.worker_id = worker_id
-        self.host = host
-        self.port = port
-        self.coordinator_addr = coordinator_addr
-        self.interval = interval
-        self.models = models or ["opt-1.3b"]
-        self.running = True
-        self.verbose = verbose
-        # Use a local socket for sending reports
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    def run(self):
-        while self.running:
-            report = WorkerLoadReport(
-                node_id=self.worker_id,
-                loaded_models=self.models,
-                queue_depth=0,
-                memory_utilization=0.2,
-                is_ready=True,
-                timestamp=time.time(),
-            )
-            message = {"type": "worker_report", "payload": report.to_dict()}
-            try:
-                self.sock.sendto(pickle.dumps(message, protocol=pickle.HIGHEST_PROTOCOL), self.coordinator_addr)
-                if self.verbose:
-                    logger.debug(f"{self.worker_id} sent worker_report")
-            except Exception:
-                logger.exception("failed to send worker_report")
-            time.sleep(self.interval)
-
-    def stop(self):
-        self.running = False
-        try:
-            self.sock.close()
-        except Exception:
-            pass
-
-
-def warmup_workers(worker_count: int, coordinator_addr: Tuple[str, int], report_interval: float, start_port: int = 10000) -> List[WorkerSimulator]:
-    sims: List[WorkerSimulator] = []
-    for i in range(worker_count):
+def create_docker_swarm(client: client, node_count: int, image: str, worker_port: int, coordinator_addr: Tuple[str, int], models: List[str] = None) -> List[Container]:
+    nodes = []
+    for i in range(node_count):
         wid = f"worker-{i+1}"
-        sim = WorkerSimulator(worker_id=wid, host="127.0.0.1", port=start_port + i, coordinator_addr=coordinator_addr, interval=report_interval, models=["opt-1.3b" if i % 2 == 0 else "opt-2.7b"]) 
-        sim.start()
-        sims.append(sim)
-    return sims
+        node = client.containers.create(
+            image=image,
+            name=wid,
+            ports={f"{worker_port}/udp": worker_port},
+            mounts=[
+                Mount(target="/models", source="/models", type="bind")
+            ],
+            environment={
+                "WORKER_ID": wid,
+                "COORDINATOR_ADDR": f"{coordinator_addr[0]}:{coordinator_addr[1]}",
+                "MODELS": ",".join(models) if models else "opt-1.3b,opt-2.7b"
+            }
+        )
+        nodes.append(node)
+    return nodes
 
 
 def measure_latencies(coordinator_addr: Tuple[str, int], num_requests: int, rate: float, timeout: float = 2.0, models: List[str] = None) -> List[float]:
@@ -173,10 +143,10 @@ def print_stats(latencies: List[float]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run central coordinator and measure scheduling latencies")
+    parser = argparse.ArgumentParser(description="Run central coordinator and measure scheduling latencies using Docker Swarm")
     parser.add_argument("--host", default="127.0.0.1", help="Coordinator host to bind")
     parser.add_argument("--port", type=int, default=9000, help="Coordinator UDP port")
-    parser.add_argument("--workers", type=int, default=3, help="Number of simulated workers")
+    parser.add_argument("--workers", type=int, default=3, help="Number of worker nodes in the Docker Swarm")
     parser.add_argument("--requests", type=int, default=200, help="Number of schedule requests to send")
     parser.add_argument("--rate", type=float, default=20.0, help="Target request rate (requests/sec)")
     parser.add_argument("--report-interval", type=float, default=1.0, help="Worker report interval (s)")
@@ -187,11 +157,10 @@ def main():
 
     coord_addr = (args.host, args.port)
 
-    coord = start_coordinator(host=args.host, port=args.port, worker_timeout=args.worker_timeout, verbose=args.verbose)
-    time.sleep(0.5)  # give coordinator a moment to bind
-
+    docker_client = client.from_env()
     try:
-        sims = warmup_workers(worker_count=args.workers, coordinator_addr=coord_addr, report_interval=args.report_interval)
+        nodes = create_docker_swarm(docker_client, node_count=args.workers, image="gcr.io/google-samples/distributed-tensorflow:latest", worker_port=9001, coordinator_addr=coord_addr, models=["opt-1.3b", "opt-2.7b"])
+
         # allow some reports to arrive
         logger.info("Warming up workers for 2s...")
         time.sleep(2.0)
@@ -203,11 +172,12 @@ def main():
 
     finally:
         # stop workers
-        for s in sims:
-            s.stop()
+        for n in nodes:
+            n.stop()
         # stop coordinator
-        coord.stop()
+        coordinator.stop()
 
 
 if __name__ == "__main__":
     main()
+
