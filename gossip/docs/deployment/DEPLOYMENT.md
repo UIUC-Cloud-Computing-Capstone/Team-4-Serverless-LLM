@@ -45,10 +45,10 @@ python3 worker_node.py --node-id worker-3 --port 8003 --coordinator-port 9000
 
 ```bash
 # Build coordinator image
-docker build -f Dockerfile.coordinator -t sllm/central-coordinator:latest .
+docker build -f docker/coordinator/Dockerfile.coordinator -t sllm/central-coordinator:latest .
 
 # Build worker image
-docker build -f Dockerfile.worker -t sllm/worker:latest .
+docker build -f docker/worker/Dockerfile.worker -t sllm/worker:latest .
 ```
 
 ### Running with Docker Compose

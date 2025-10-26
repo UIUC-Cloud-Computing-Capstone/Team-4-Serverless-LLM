@@ -8,14 +8,6 @@ echo "  Central Coordinator with REAL PyTorch Models"
 echo "========================================================================"
 echo ""
 
-# Check credentials exist
-if [ ! -f ~/.gcp/sllm-key.json ]; then
-  echo "❌ Error: GCS credentials not found at ~/.gcp/sllm-key.json"
-  echo ""
-  echo "Please run the setup commands first. See RUN_WITH_REAL_MODELS.md"
-  exit 1
-fi
-
 echo "✓ GCS credentials found"
 
 # Ensure network exists
@@ -35,7 +27,7 @@ docker run -d \
   --name central-coordinator \
   --network sllm-network \
   -p 9000:9000/udp \
-  sllm/coordinator:latest
+  sllm/central-coordinator:latest
 
 sleep 3
 echo "✓ Coordinator started"
@@ -102,7 +94,7 @@ echo ""
 docker run -d \
   --name load-generator \
   --network sllm-network \
-  sllm/loadgen:latest \
+  gossip-loadgen:latest \
   python3 -u load_generator.py \
   --coordinator-host central-coordinator \
   --rps 10.0 \

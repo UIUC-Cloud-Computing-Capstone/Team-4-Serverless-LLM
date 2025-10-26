@@ -33,7 +33,7 @@ fi
 echo "✅ Docker Compose found"
 
 # Note: May need to have run virtual environment setup prior to this
-pip install -r ../../requirements.txt
+pip install -r requirements.txt
 echo "✅ Python dependencies installed"
 
 # Create necessary directories
@@ -42,16 +42,6 @@ mkdir -p logs
 mkdir -p data/cache
 mkdir -p data/models
 echo "✅ Directories created"
-
-# Check GCS credentials
-echo "🔑 Checking GCS credentials..."
-if [ -f "gcs-key.json" ]; then
-    echo "✅ GCS credentials found"
-    export GOOGLE_APPLICATION_CREDENTIALS="$(pwd)/gcs-key.json"
-else
-    echo "⚠️  GCS credentials not found. Real model downloads will be disabled."
-    echo "   To enable real models, place your GCS key at: $(pwd)/gcs-key.json"
-fi
 
 # Build Docker images
 echo "🐳 Building Docker images..."
