@@ -4,13 +4,13 @@ services:
   # Central Coordinator
   central-coordinator:
     build:
-      context: .
-      dockerfile: Dockerfile.coordinator
+      context: ../..
+      dockerfile: docker/coordinator/Dockerfile.coordinator
     container_name: central-coordinator
     hostname: central-coordinator
     environment:
       - DEPLOYMENT_MODE=docker
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - WORKER_TIMEOUT=10.0
     ports:
       - "9000:9000/udp"
@@ -21,8 +21,8 @@ services:
   # Worker 1
   worker-1:
     build:
-      context: .
-      dockerfile: Dockerfile.worker
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
     container_name: worker-1
     hostname: worker-1
     environment:
@@ -31,15 +31,15 @@ services:
       - COORDINATOR_PORT=9000
       - WORKER_PORT=8000
       - DEPLOYMENT_MODE=docker
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - REPORT_INTERVAL=1.0
       - USE_REAL_MODELS=true
       - GCS_BUCKET=remote_model
       - MODEL_CACHE_DIR=/tmp/model_cache
       - PYTORCH_DEVICE=cpu
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+      # - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json  # Not needed for HuggingFace
     volumes:
-      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      # - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro  # Not needed
       - model-cache-1:/tmp/model_cache
     depends_on:
       - central-coordinator
@@ -50,8 +50,8 @@ services:
   # Worker 2
   worker-2:
     build:
-      context: .
-      dockerfile: Dockerfile.worker
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
     container_name: worker-2
     hostname: worker-2
     environment:
@@ -60,15 +60,15 @@ services:
       - COORDINATOR_PORT=9000
       - WORKER_PORT=8000
       - DEPLOYMENT_MODE=docker
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - REPORT_INTERVAL=1.0
       - USE_REAL_MODELS=true
       - GCS_BUCKET=remote_model
       - MODEL_CACHE_DIR=/tmp/model_cache
       - PYTORCH_DEVICE=cpu
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+      # - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json  # Not needed for HuggingFace
     volumes:
-      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      # - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro  # Not needed
       - model-cache-2:/tmp/model_cache
     depends_on:
       - central-coordinator
@@ -79,8 +79,8 @@ services:
   # Worker 3
   worker-3:
     build:
-      context: .
-      dockerfile: Dockerfile.worker
+      context: ../..
+      dockerfile: docker/worker/Dockerfile.worker
     container_name: worker-3
     hostname: worker-3
     environment:
@@ -89,21 +89,45 @@ services:
       - COORDINATOR_PORT=9000
       - WORKER_PORT=8000
       - DEPLOYMENT_MODE=docker
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - REPORT_INTERVAL=1.0
       - USE_REAL_MODELS=true
       - GCS_BUCKET=remote_model
       - MODEL_CACHE_DIR=/tmp/model_cache
       - PYTORCH_DEVICE=cpu
-      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json
+      # - GOOGLE_APPLICATION_CREDENTIALS=/app/gcs-credentials.json  # Not needed for HuggingFace
     volumes:
-      - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro
+      # - ~/.config/gcloud/application_default_credentials.json:/app/gcs-credentials.json:ro  # Not needed
       - model-cache-3:/tmp/model_cache
     depends_on:
       - central-coordinator
     networks:
       - sllm-network
     restart: unless-stopped
+
+  # Load Generator
+  load-generator:
+    build:
+      context: ../..
+      dockerfile: docker/loadgen/Dockerfile.loadgen
+    container_name: load-generator
+    hostname: load-generator
+    environment:
+      - COORDINATOR_HOST=central-coordinator
+      - COORDINATOR_PORT=9000
+      - TARGET_RPS=5.0
+      - CV=8.0
+      - DURATION=300.0
+      - DEPLOYMENT_MODE=docker
+      - LOG_LEVEL=INFO
+    depends_on:
+      - central-coordinator
+      - worker-1
+      - worker-2
+      - worker-3
+    networks:
+      - sllm-network
+    restart: "no"  # Only run once
 
 networks:
   sllm-network:

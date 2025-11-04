@@ -23,3 +23,4 @@ python tests/unit/test_model_loading.py
 
 echo ""
 echo "✅ All tests completed!"
+

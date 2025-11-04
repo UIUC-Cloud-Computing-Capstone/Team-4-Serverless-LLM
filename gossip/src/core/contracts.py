@@ -165,3 +165,71 @@ EXAMPLE_SCHEDULE_RESPONSE = {
     "estimated_wait_time": 2.5,
     "reason": "Worker has model loaded with low queue depth"
 }
+
+
+@dataclass
+class InferenceRequest:
+    """
+    Request to perform inference on a worker.
+
+    Attributes:
+        request_id: Unique identifier for this inference request
+        model_id: Model identifier to use for inference
+        prompt: Input text prompt for the model
+        max_tokens: Maximum number of tokens to generate
+        temperature: Sampling temperature (0.0 = deterministic)
+    """
+    request_id: str
+    model_id: str
+    prompt: str
+    max_tokens: int = 50
+    temperature: float = 0.0
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary representation."""
+        return asdict(self)
+
+    def to_json(self) -> str:
+        """Convert to JSON string."""
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'InferenceRequest':
+        """Create from dictionary."""
+        return cls(**data)
+
+
+@dataclass
+class InferenceResponse:
+    """
+    Response from inference execution.
+
+    Attributes:
+        request_id: Unique identifier for this inference request
+        worker_id: Worker that performed the inference
+        output_text: Generated text from the model
+        num_tokens: Number of tokens generated
+        latency_ms: Inference latency in milliseconds
+        success: Whether inference completed successfully
+        error: Optional error message if failed
+    """
+    request_id: str
+    worker_id: str
+    output_text: str
+    num_tokens: int
+    latency_ms: float
+    success: bool = True
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary representation."""
+        return asdict(self)
+
+    def to_json(self) -> str:
+        """Convert to JSON string."""
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'InferenceResponse':
+        """Create from dictionary."""
+        return cls(**data)

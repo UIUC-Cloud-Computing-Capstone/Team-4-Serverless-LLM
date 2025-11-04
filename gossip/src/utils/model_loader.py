@@ -13,6 +13,7 @@ import shutil
 import logging
 import torch
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 from google.cloud import storage
@@ -223,41 +224,57 @@ class ModelLoader:
         Load a model into memory.
 
         Args:
-            model_id: Model identifier (e.g., 'opt-1.3b')
+            model_id: Model identifier (e.g., 'opt-1.3b' or 'google/gemma-2-2b')
 
         Returns:
             True if successful, False otherwise
         """
+        logger.info(f"========== STARTING MODEL LOAD: {model_id} ==========")
+
         if model_id in self.loaded_models:
-            logger.info(f"Model {model_id} already loaded")
+            logger.info(f"Model {model_id} already loaded in memory")
             return True
 
         try:
             # Try to download from GCS first
             local_model_path = None
             try:
+                logger.info(f"Attempting to download {model_id} from GCS bucket: {self.gcs_bucket}")
                 local_model_path = self._download_from_gcs(model_id)
+                logger.info(f"Successfully downloaded from GCS to {local_model_path}")
             except Exception as gcs_error:
                 logger.warning(f"GCS download failed for {model_id}: {gcs_error}")
                 logger.info(f"Falling back to HuggingFace for {model_id}")
 
                 # Fallback: Download directly from HuggingFace
-                local_model_path = self.cache_dir / model_id
+                local_model_path = self.cache_dir / model_id.replace('/', '_')
                 if not local_model_path.exists():
-                    logger.info(f"Downloading {model_id} from HuggingFace...")
+                    logger.info(f"Model not cached locally. Will download {model_id} from HuggingFace...")
                     # HuggingFace will download and cache automatically
-                    hf_model_name = f"facebook/{model_id}"
-                    local_model_path = hf_model_name
+                    # Use the original model_id (e.g., 'google/gemma-2-2b')
+                    local_model_path = model_id
+                    logger.info(f"HuggingFace will download to: {local_model_path}")
                 else:
                     logger.info(f"Using cached model at {local_model_path}")
 
             logger.info(f"Loading model {model_id} from {local_model_path}")
+            logger.info(f"Device: {self.device}")
 
             # Load the model with transformers
             from transformers import AutoModelForCausalLM, AutoTokenizer
 
-            # Load tokenizer and model
+            # Load tokenizer
+            logger.info(f"Loading tokenizer for {model_id}...")
+            tokenizer_start = time.time()
             tokenizer = AutoTokenizer.from_pretrained(str(local_model_path))
+            tokenizer_time = time.time() - tokenizer_start
+            logger.info(f"Tokenizer loaded in {tokenizer_time:.2f}s")
+
+            # Load model
+            logger.info(f"Loading model for {model_id}...")
+            logger.info(f"Using dtype: {'float16' if self.device.startswith('cuda') else 'float32'}")
+            model_start = time.time()
+
             model = AutoModelForCausalLM.from_pretrained(
                 str(local_model_path),
                 torch_dtype=torch.float16 if self.device.startswith('cuda') else torch.float32,
@@ -265,9 +282,16 @@ class ModelLoader:
                 low_cpu_mem_usage=True
             )
 
+            model_time = time.time() - model_start
+            logger.info(f"Model loaded in {model_time:.2f}s")
+
             # Move to device if CPU
             if not self.device.startswith('cuda'):
+                logger.info(f"Moving model to device: {self.device}")
+                device_move_start = time.time()
                 model = model.to(self.device)
+                device_move_time = time.time() - device_move_start
+                logger.info(f"Model moved to device in {device_move_time:.2f}s")
 
             # Store in cache
             self.loaded_models[model_id] = {
@@ -276,11 +300,20 @@ class ModelLoader:
                 'path': local_model_path
             }
 
-            logger.info(f"Successfully loaded model {model_id} on device {self.device}")
+            # Log model info
+            total_params = sum(p.numel() for p in model.parameters())
+            logger.info(f"Model parameters: {total_params:,} ({total_params/1e6:.1f}M)")
+
+            mem_usage = self.get_model_memory_usage(model_id)
+            if mem_usage:
+                logger.info(f"Model memory usage: {mem_usage / (1024**2):.1f} MB")
+
+            logger.info(f"========== MODEL LOAD COMPLETE: {model_id} ==========")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to load model {model_id}: {e}", exc_info=True)
+            logger.error(f"========== MODEL LOAD FAILED: {model_id} ==========")
+            logger.error(f"Error: {e}", exc_info=True)
             return False
 
     def unload_model(self, model_id: str) -> bool:
@@ -293,17 +326,23 @@ class ModelLoader:
         Returns:
             True if successful, False otherwise
         """
+        logger.info(f"========== STARTING MODEL UNLOAD: {model_id} ==========")
+
         if model_id not in self.loaded_models:
             logger.warning(f"Model {model_id} not loaded, cannot unload")
             return False
 
         try:
-            logger.info(f"Unloading model {model_id}")
+            # Get memory usage before unloading
+            mem_before = self.get_model_memory_usage(model_id)
+            if mem_before:
+                logger.info(f"Memory usage before unload: {mem_before / (1024**2):.1f} MB")
 
             # Get model info
             model_info = self.loaded_models[model_id]
 
             # Delete model and tokenizer
+            logger.info(f"Deleting model and tokenizer from memory...")
             del model_info['model']
             del model_info['tokenizer']
 
@@ -312,13 +351,15 @@ class ModelLoader:
 
             # Clear CUDA cache if using GPU
             if self.device.startswith('cuda'):
+                logger.info("Clearing CUDA cache...")
                 torch.cuda.empty_cache()
 
-            logger.info(f"Successfully unloaded model {model_id}")
+            logger.info(f"========== MODEL UNLOAD COMPLETE: {model_id} ==========")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to unload model {model_id}: {e}", exc_info=True)
+            logger.error(f"========== MODEL UNLOAD FAILED: {model_id} ==========")
+            logger.error(f"Error: {e}", exc_info=True)
             return False
 
     def get_loaded_models(self) -> list[str]:

@@ -67,14 +67,13 @@ def main():
 
         models_to_load = []
 
-        # IMPORTANT: Only opt-1.3b and opt-2.7b are supported
-        available_models = ["opt-1.3b", "opt-2.7b"]
+        # IMPORTANT: Using OPT-125M for testing
+        # This is a very small model (125M params) that's good for testing
+        # and doesn't require authentication
+        available_models = ["facebook/opt-125m"]
 
-        # Assign model based on worker ID for deterministic distribution
-        # worker-0, worker-2, worker-4, ... -> opt-1.3b
-        # worker-1, worker-3, worker-5, ... -> opt-2.7b
-        worker_index = int(worker_id.split('-')[-1]) if '-' in worker_id else 0
-        model_to_load = available_models[worker_index % len(available_models)]
+        # All workers will load the same small model for now
+        model_to_load = available_models[0]
         models_to_load = [model_to_load]
 
         if config.USE_REAL_MODELS:

@@ -72,7 +72,7 @@ class LoadGenerator:
             target_rps=target_rps,
             cv=cv,
             duration=duration,
-            models=['opt-1.3b', 'opt-2.7b'],
+            models=['facebook/opt-125m'],  # Using the small model we have loaded
             seed=42
         )
         self.trace = self.workload_generator.generate_trace(dataset_samples=self.mixed_workload)
@@ -117,7 +117,7 @@ class LoadGenerator:
                 # Query coordinator for cluster state
                 response = self.client.request_schedule(
                     request_id="readiness-check",
-                    model_required="opt-1.3b",  # Any model
+                    model_required="facebook/opt-125m",  # The model we have loaded
                     timeout=1.0
                 )
                 
@@ -169,8 +169,8 @@ class LoadGenerator:
                 logger.info("Duration exceeded, stopping load generation")
                 break
 
-            # Send schedule request
-            response = self.client.request_schedule(
+            # Step 1: Send schedule request to coordinator
+            schedule_response = self.client.request_schedule(
                 request_id=req.request_id,
                 model_required=req.model_id,
                 timeout=2.0
@@ -178,27 +178,59 @@ class LoadGenerator:
 
             self.total_requests += 1
 
-            if response:
-                self.successful_requests += 1
-
-                # Track cache hits/misses
-                if response.action.value == "serve":
+            if schedule_response:
+                # Track cache hits/misses based on scheduling action
+                if schedule_response.action.value == "serve":
                     self.cache_hits += 1
-                elif response.action.value == "cold_start":
+                elif schedule_response.action.value == "cold_start":
                     self.cache_misses += 1
 
-                # Log every 100th request
-                if self.total_requests % 100 == 0:
-                    elapsed = time.time() - start_time
-                    logger.info(
-                        f"[{elapsed:.1f}s] Request {req.request_id} ({req.model_id}): "
-                        f"→ {response.worker_id} ({response.action.value}) | "
-                        f"Total: {self.total_requests}, Success rate: {100*self.successful_requests/self.total_requests:.1f}%"
-                    )
+                # Step 2: Send actual inference request to the assigned worker
+                # Get the prompt from the dataset sample
+                prompt_text = req.prompt if hasattr(req, 'prompt') else "What is the capital of France?"
+
+                inference_response = self.client.request_inference(
+                    worker_host=schedule_response.worker_id,  # Use worker_id as hostname
+                    worker_port=8000,
+                    request_id=req.request_id,
+                    model_id=req.model_id,
+                    prompt=prompt_text[:500],  # Truncate prompt to 500 chars for demo
+                    max_tokens=50,
+                    temperature=0.0,
+                    timeout=30.0
+                )
+
+                if inference_response and inference_response.success:
+                    self.successful_requests += 1
+
+                    # Log every 10th request with full details
+                    if self.total_requests % 10 == 0:
+                        elapsed = time.time() - start_time
+                        logger.info("=" * 80)
+                        logger.info(f"[{elapsed:.1f}s] REQUEST {req.request_id} | Model: {req.model_id}")
+                        logger.info(f"  Schedule: {schedule_response.worker_id} ({schedule_response.action.value})")
+                        logger.info(f"  Prompt: {prompt_text[:100]}...")
+                        logger.info(f"  Output: {inference_response.output_text[:150]}...")
+                        logger.info(f"  Tokens: {inference_response.num_tokens} | Latency: {inference_response.latency_ms:.0f}ms")
+                        logger.info(f"  Stats: Total={self.total_requests}, Success={100*self.successful_requests/self.total_requests:.1f}%")
+                        logger.info("=" * 80)
+                    elif self.total_requests % 100 == 0:
+                        # Summary every 100
+                        elapsed = time.time() - start_time
+                        logger.info(
+                            f"[{elapsed:.1f}s] Milestone {self.total_requests}: "
+                            f"Success={100*self.successful_requests/self.total_requests:.1f}%, "
+                            f"Avg latency={inference_response.latency_ms:.0f}ms"
+                        )
+                else:
+                    self.failed_requests += 1
+                    if self.failed_requests % 10 == 0:
+                        logger.warning(f"Failed inference count: {self.failed_requests}")
             else:
+                # Schedule request failed
                 self.failed_requests += 1
                 if self.failed_requests % 10 == 0:
-                    logger.warning(f"Failed request count: {self.failed_requests}")
+                    logger.warning(f"Failed schedule request count: {self.failed_requests}")
 
         # Final statistics
         elapsed = time.time() - start_time

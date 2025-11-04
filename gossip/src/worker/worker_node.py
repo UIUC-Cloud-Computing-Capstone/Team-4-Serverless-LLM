@@ -12,7 +12,7 @@ import time
 import random
 import logging
 from typing import List, Optional
-from contracts import WorkerLoadReport, ScheduleRequest, ScheduleResponse
+from contracts import WorkerLoadReport, ScheduleRequest, ScheduleResponse, InferenceRequest, InferenceResponse
 from model_loader import ModelLoader
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(threadName)s] %(message)s')
@@ -154,10 +154,15 @@ class WorkerNode:
 
         while self.is_running:
             try:
-                raw_data, _ = self.sock.recvfrom(8192)
+                raw_data, addr = self.sock.recvfrom(65536)  # Increased buffer for inference data
                 message = pickle.loads(raw_data)
-                # Can handle schedule responses or other messages here
-                self.logger.debug(f"Received message: {message.get('type')}")
+                msg_type = message.get('type')
+
+                self.logger.debug(f"Received message: {msg_type}")
+
+                # Handle inference requests
+                if msg_type == 'inference_request':
+                    self._handle_inference_request(message['payload'], addr)
 
             except socket.timeout:
                 # Timeout is normal when socket has timeout set for schedule requests
@@ -230,6 +235,75 @@ class WorkerNode:
 
         except Exception as e:
             self.logger.error(f"Error requesting schedule: {e}", exc_info=True)
+            self.sock.settimeout(None)
+            return None
+
+    def request_inference(
+        self,
+        worker_host: str,
+        worker_port: int,
+        request_id: str,
+        model_id: str,
+        prompt: str,
+        max_tokens: int = 50,
+        temperature: float = 0.0,
+        timeout: float = 30.0
+    ) -> Optional[InferenceResponse]:
+        """
+        Send an inference request to a worker and wait for response.
+
+        Args:
+            worker_host: Worker hostname
+            worker_port: Worker port
+            request_id: Unique identifier for the request
+            model_id: Model to use for inference
+            prompt: Input text prompt
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            timeout: Timeout for waiting for response (seconds)
+
+        Returns:
+            InferenceResponse if successful, None if timeout
+        """
+        request = InferenceRequest(
+            request_id=request_id,
+            model_id=model_id,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+
+        message = {
+            'type': 'inference_request',
+            'payload': request.to_dict()
+        }
+
+        try:
+            # Set socket timeout for receiving response
+            self.sock.settimeout(timeout)
+
+            # Send request
+            serialized = pickle.dumps(message)
+            self.sock.sendto(serialized, (worker_host, worker_port))
+
+            # Wait for response
+            raw_data, _ = self.sock.recvfrom(65536)
+            response_msg = pickle.loads(raw_data)
+
+            # Reset socket to non-blocking
+            self.sock.settimeout(None)
+
+            if response_msg.get('type') == 'inference_response':
+                response = InferenceResponse.from_dict(response_msg['payload'])
+                return response
+
+        except socket.timeout:
+            self.logger.warning(f"Timeout waiting for inference response for {request_id}")
+            self.sock.settimeout(None)
+            return None
+
+        except Exception as e:
+            self.logger.error(f"Error requesting inference: {e}", exc_info=True)
             self.sock.settimeout(None)
             return None
 
@@ -396,6 +470,102 @@ class WorkerNode:
             self.queue_depth = max(0, self.queue_depth + random.randint(-2, 3))
             # Randomly adjust memory utilization
             self.memory_utilization = max(0.0, min(1.0, self.memory_utilization + random.uniform(-0.1, 0.1)))
+
+    def _handle_inference_request(self, payload: dict, sender_addr: tuple):
+        """
+        Handle an inference request and send back the response.
+
+        Args:
+            payload: Inference request payload
+            sender_addr: Address of the sender (for UDP response)
+        """
+        request = InferenceRequest.from_dict(payload)
+
+        self.logger.info(f"========== INFERENCE REQUEST: {request.request_id} ==========")
+        self.logger.info(f"Model: {request.model_id}")
+        self.logger.info(f"Prompt: {request.prompt[:100]}...")
+
+        start_time = time.time()
+
+        try:
+            # Check if model is loaded
+            if not self.use_real_models or request.model_id not in self.get_loaded_models():
+                error_msg = f"Model {request.model_id} not loaded on {self.node_id}"
+                self.logger.error(error_msg)
+                response = InferenceResponse(
+                    request_id=request.request_id,
+                    worker_id=self.node_id,
+                    output_text="",
+                    num_tokens=0,
+                    latency_ms=0.0,
+                    success=False,
+                    error=error_msg
+                )
+            else:
+                # Perform actual inference
+                model_info = self.model_loader.loaded_models[request.model_id]
+                model = model_info['model']
+                tokenizer = model_info['tokenizer']
+
+                # Tokenize input
+                inputs = tokenizer(request.prompt, return_tensors='pt', truncation=True, max_length=2048)
+
+                # Generate output
+                with threading.Lock():  # Ensure thread-safe inference
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=request.max_tokens,
+                        do_sample=(request.temperature > 0.0),
+                        temperature=request.temperature if request.temperature > 0.0 else None,
+                        pad_token_id=tokenizer.eos_token_id
+                    )
+
+                # Decode output
+                output_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                num_tokens = len(outputs[0])
+
+                latency_ms = (time.time() - start_time) * 1000
+
+                self.logger.info(f"Inference complete in {latency_ms:.1f}ms, generated {num_tokens} tokens")
+                self.logger.info(f"Output: {output_text[:200]}...")
+
+                response = InferenceResponse(
+                    request_id=request.request_id,
+                    worker_id=self.node_id,
+                    output_text=output_text,
+                    num_tokens=num_tokens,
+                    latency_ms=latency_ms,
+                    success=True
+                )
+
+            # Send response back to sender
+            response_msg = {
+                'type': 'inference_response',
+                'payload': response.to_dict()
+            }
+            serialized = pickle.dumps(response_msg)
+            self.sock.sendto(serialized, sender_addr)
+
+            self.logger.info(f"========== INFERENCE COMPLETE: {request.request_id} ==========")
+
+        except Exception as e:
+            self.logger.error(f"Inference failed: {e}", exc_info=True)
+            latency_ms = (time.time() - start_time) * 1000
+            response = InferenceResponse(
+                request_id=request.request_id,
+                worker_id=self.node_id,
+                output_text="",
+                num_tokens=0,
+                latency_ms=latency_ms,
+                success=False,
+                error=str(e)
+            )
+            response_msg = {
+                'type': 'inference_response',
+                'payload': response.to_dict()
+            }
+            serialized = pickle.dumps(response_msg)
+            self.sock.sendto(serialized, sender_addr)
 
     def initialize(self, models_to_load: List[str]) -> float:
         """

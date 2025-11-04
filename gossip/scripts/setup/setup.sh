@@ -63,3 +63,4 @@ echo "2. Or use Docker Compose: docker-compose -f config/docker/docker-compose.y
 echo "3. Check logs: docker logs worker-0"
 echo ""
 echo "For more information, see README.md"
+
