@@ -367,60 +367,50 @@ class WorkerNode:
 
     def _get_memory_utilization(self) -> float:
         """
-        Get actual memory utilization of current process using top command.
+        Get actual memory utilization using cgroup filesystem.
+        This is the proper way to get memory usage in Docker containers.
 
         Returns:
             Memory utilization as fraction (0.0 to 1.0)
         """
         try:
-            import subprocess
-            import os
-
-            pid = os.getpid()
-            # Use top command to get memory utilization for this process
-            # On macOS: top -pid <pid> -l 1 -stats mem
-            # On Linux: top -b -n 1 -p <pid>
-
-            # Try macOS format first
+            # Try cgroup v2 first (newer Docker versions)
             try:
-                result = subprocess.run(
-                    ['top', '-pid', str(pid), '-l', '1', '-stats', 'mem'],
-                    capture_output=True,
-                    text=True,
-                    timeout=1
-                )
-                # Parse memory from output (format: "123M")
-                lines = result.stdout.strip().split('\n')
-                if len(lines) >= 2:
-                    mem_str = lines[-1].strip()
-                    # Extract number and unit (e.g., "123M" or "1.5G")
-                    import re
-                    match = re.search(r'([\d.]+)([MG])', mem_str)
-                    if match:
-                        value = float(match.group(1))
-                        unit = match.group(2)
-                        # Convert to GB
-                        mem_gb = value / 1024 if unit == 'M' else value
-                        # Assume total memory is available (rough estimate)
-                        # Get total system memory
-                        total_mem = self._get_total_memory()
-                        return min(1.0, mem_gb / total_mem) if total_mem > 0 else 0.0
-            except (subprocess.SubprocessError, FileNotFoundError):
-                # Try Linux format
-                result = subprocess.run(
-                    ['ps', '-p', str(pid), '-o', '%mem'],
-                    capture_output=True,
-                    text=True,
-                    timeout=1
-                )
-                lines = result.stdout.strip().split('\n')
-                if len(lines) >= 2:
-                    mem_percent = float(lines[1].strip())
-                    return mem_percent / 100.0
-        except Exception as e:
-            self.logger.warning(f"Failed to get memory utilization: {e}")
+                with open('/sys/fs/cgroup/memory.current', 'r') as f:
+                    current = int(f.read().strip())
+                with open('/sys/fs/cgroup/memory.max', 'r') as f:
+                    max_mem = f.read().strip()
+                    # 'max' means no limit, use system memory
+                    if max_mem == 'max':
+                        max_mem = self._get_total_memory() * (1024**3)  # Convert GB to bytes
+                    else:
+                        max_mem = int(max_mem)
 
-        # Fallback to current value if command fails
+                if max_mem > 0:
+                    return min(1.0, current / max_mem)
+            except (FileNotFoundError, ValueError, PermissionError):
+                # Try cgroup v1 (older Docker versions)
+                try:
+                    with open('/sys/fs/cgroup/memory/memory.usage_in_bytes', 'r') as f:
+                        current = int(f.read().strip())
+                    with open('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'r') as f:
+                        max_mem = int(f.read().strip())
+
+                    # Sometimes limit is set to a very large number (no real limit)
+                    # In that case, use system memory
+                    if max_mem > (1024**4):  # More than 1TB means unlimited
+                        max_mem = self._get_total_memory() * (1024**3)
+
+                    if max_mem > 0:
+                        return min(1.0, current / max_mem)
+                except (FileNotFoundError, ValueError, PermissionError):
+                    # Not in a container or cgroups not available
+                    # This might happen in local development
+                    pass
+        except Exception as e:
+            self.logger.debug(f"Failed to get cgroup memory utilization: {e}")
+
+        # Fallback to current value if cgroup reading fails
         return self.memory_utilization
 
     def _get_total_memory(self) -> float:
@@ -431,9 +421,16 @@ class WorkerNode:
             Total memory in GB
         """
         try:
-            import subprocess
-            # Try macOS
+            # Try Linux first (works in Docker containers)
             try:
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            kb = int(line.split()[1])
+                            return kb / (1024**2)  # Convert to GB
+            except (FileNotFoundError, PermissionError):
+                # Try macOS (for local development)
+                import subprocess
                 result = subprocess.run(
                     ['sysctl', '-n', 'hw.memsize'],
                     capture_output=True,
@@ -442,13 +439,6 @@ class WorkerNode:
                 )
                 bytes_mem = int(result.stdout.strip())
                 return bytes_mem / (1024**3)  # Convert to GB
-            except (subprocess.SubprocessError, FileNotFoundError):
-                # Try Linux
-                with open('/proc/meminfo', 'r') as f:
-                    for line in f:
-                        if line.startswith('MemTotal:'):
-                            kb = int(line.split()[1])
-                            return kb / (1024**2)  # Convert to GB
         except Exception:
             pass
         return 16.0  # Default fallback to 16GB
@@ -510,8 +500,9 @@ class WorkerNode:
                 # Tokenize input
                 inputs = tokenizer(request.prompt, return_tensors='pt', truncation=True, max_length=2048)
 
-                # Generate output
-                with threading.Lock():  # Ensure thread-safe inference
+                # Generate output with inference mode for better performance
+                import torch
+                with torch.inference_mode():
                     outputs = model.generate(
                         **inputs,
                         max_new_tokens=request.max_tokens,

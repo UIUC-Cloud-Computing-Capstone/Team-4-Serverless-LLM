@@ -195,9 +195,9 @@ class LoadGenerator:
                     request_id=req.request_id,
                     model_id=req.model_id,
                     prompt=prompt_text[:500],  # Truncate prompt to 500 chars for demo
-                    max_tokens=50,
+                    max_tokens=30,
                     temperature=0.0,
-                    timeout=30.0
+                    timeout=90.0
                 )
 
                 if inference_response and inference_response.success:
